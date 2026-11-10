@@ -13,6 +13,109 @@
     const mainVideos = new Set();
     let mainObserver = null, previewReady = false;
     let streamChoice = null, pendingSource = null, sourceRevision = 0;
+    const browserRussian = [...(navigator.languages || []), navigator.language || ''].some(lang => /^ru(?:[-_]|$)/i.test(lang));
+    let uiLanguage = browserRussian ? 'ru' : 'en', statusKey = 'loading';
+    const messages = {
+        en: {
+            loading: 'Loading…', loadingStream: 'Loading stream…', loadingAd: 'Loading advertisement…',
+            unavailable: 'This stream is unavailable on this page.', invalidId: 'The stream ID is missing or invalid.',
+            playerError: 'Unable to load the player.', settingsError: 'Unable to load settings. Please reload the page.',
+            play: 'Play', live: 'LIVE', ad: 'Advertisement', resumeAd: 'Play advertisement', advertiser: 'Visit advertiser website',
+            pause: 'Pause', continue: 'Resume', mute: 'Mute', unmute: 'Unmute', skip: 'Skip',
+            skipAfter: n => `Skip in ${n}s`, source: 'Source:', sourceLabel: 'Stream source',
+            auto: n => `Auto — stream ${n}`, stream: n => `Stream ${n}`
+        },
+        ru: {
+            loading: 'Загрузка…', loadingStream: 'Загрузка трансляции…', loadingAd: 'Загрузка рекламы…',
+            unavailable: 'Трансляция недоступна на этой странице.', invalidId: 'Идентификатор трансляции не указан или некорректен.',
+            playerError: 'Не удалось загрузить плеер.', settingsError: 'Не удалось загрузить настройки. Обновите страницу.',
+            play: 'Воспроизвести', live: 'ЭФИР', ad: 'Реклама', resumeAd: 'Продолжить рекламу', advertiser: 'Перейти на сайт рекламодателя',
+            pause: 'Пауза', continue: 'Продолжить', mute: 'Выключить звук', unmute: 'Включить звук', skip: 'Пропустить',
+            skipAfter: n => `Пропустить через ${n} с`, source: 'Источник:', sourceLabel: 'Источник трансляции',
+            auto: n => `Авто — поток ${n}`, stream: n => `Поток ${n}`
+        }
+    };
+    function t(key, value) {
+        const message = messages[uiLanguage][key];
+        return typeof message === 'function' ? message(value) : message;
+    }
+    const nativeRussian = {
+        'play': 'Воспроизвести', 'pause': 'Пауза', 'play / pause': 'Воспроизвести / пауза',
+        'replay': 'Повторить', 'stop': 'Остановить', 'live': 'ЭФИР', 'settings': 'Настройки',
+        'quality': 'Качество', 'auto': 'Авто', 'audio': 'Аудио', 'audio track': 'Аудиодорожка',
+        'audio tracks': 'Аудиодорожки', 'subtitles': 'Субтитры', 'speed': 'Скорость',
+        'playback speed': 'Скорость воспроизведения', 'scale': 'Масштаб', 'volume': 'Громкость',
+        'sound': 'Звук', 'mute': 'Выключить звук', 'unmute': 'Включить звук',
+        'turn on the sound': 'Включить звук', 'turn off the sound': 'Выключить звук',
+        'fullscreen': 'На весь экран', 'full screen': 'На весь экран',
+        'exit fullscreen': 'Выйти из полноэкранного режима', 'exit full screen': 'Выйти из полноэкранного режима',
+        'picture-in-picture': 'Картинка в картинке', 'close': 'Закрыть', 'off': 'Выкл.',
+        'on': 'Вкл.', 'none': 'Нет', 'disabled': 'Отключено', 'download': 'Скачать',
+        'share': 'Поделиться', 'copy link': 'Скопировать ссылку', 'copy video link': 'Скопировать ссылку на видео',
+        'copy link to video': 'Скопировать ссылку на видео', 'copy embed code': 'Скопировать код плеера',
+        'embed code': 'Код плеера', 'loading': 'Загрузка', 'loading...': 'Загрузка…',
+        'loading…': 'Загрузка…', 'wait': 'Подождите', 'wait...': 'Подождите…',
+        'error': 'Ошибка', 'network error': 'Ошибка сети', 'file not found': 'Файл не найден',
+        'video unavailable': 'Видео недоступно', 'retry': 'Повторить', 'try again': 'Повторить',
+        'please, turn off the adblock': 'Пожалуйста, отключите блокировщик рекламы',
+        'please turn off adblock': 'Пожалуйста, отключите блокировщик рекламы'
+    };
+    const nativeTextState = new WeakMap(), nativeAttributeState = new WeakMap();
+    function nativeText(value) {
+        if (uiLanguage !== 'ru') return value;
+        const clean = value.trim(), translated = nativeRussian[clean.replace(/\s+/g, ' ').toLowerCase()];
+        return translated ? value.replace(clean, translated) : value;
+    }
+    function localizeNative() {
+        const root = $('preroll');
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+            const node = walker.currentNode;
+            if (node.parentElement.closest('script,style,#source-controls')) continue;
+            const saved = nativeTextState.get(node);
+            const original = saved?.rendered === node.nodeValue ? saved.original : node.nodeValue;
+            const rendered = nativeText(original);
+            if (node.nodeValue !== rendered) node.nodeValue = rendered;
+            nativeTextState.set(node, {original, rendered});
+        }
+        for (const node of root.querySelectorAll('[title],[aria-label]')) {
+            if (node.closest('#source-controls')) continue;
+            const saved = nativeAttributeState.get(node) || {};
+            for (const attr of ['title', 'aria-label']) {
+                const current = node.getAttribute(attr);
+                if (current === null) continue;
+                const original = saved[attr]?.rendered === current ? saved[attr].original : current;
+                const rendered = nativeText(original);
+                if (current !== rendered) node.setAttribute(attr, rendered);
+                saved[attr] = {original, rendered};
+            }
+            nativeAttributeState.set(node, saved);
+        }
+    }
+    function setStatus(key) { statusKey = key; status.textContent = t(key); status.hidden = false; }
+    function updateSkip() {
+        const remaining = Math.max(0, Math.ceil(15 - watched));
+        skip.disabled = remaining > 0;
+        skip.textContent = remaining ? t('skipAfter', remaining) : t('skip');
+    }
+    function applyLanguage(language) {
+        uiLanguage = browserRussian || language === 'ru' ? 'ru' : 'en';
+        document.documentElement.lang = uiLanguage;
+        document.title = t('live');
+        gate.textContent = t('play'); gate.setAttribute('aria-label', t('play'));
+        resume.setAttribute('aria-label', t('resumeAd')); resume.title = t('resumeAd');
+        click.setAttribute('aria-label', t('advertiser'));
+        $('ad-label').textContent = t('ad');
+        if ($('live-label')) $('live-label').textContent = '00:00 / ' + t('live');
+        pause.textContent = t(wasPlaying && video.paused ? 'continue' : 'pause');
+        mute.textContent = t(video.muted ? 'unmute' : 'mute');
+        status.textContent = t(statusKey);
+        updateSkip(); streamChoice?.render(); localizeNative();
+    }
+    async function loadUiLanguage() {
+        if (browserRussian) return;
+        try { applyLanguage(JSON.parse(await request(GEO + 'language.php')).uiLanguage); } catch { /* Browser language remains usable. */ }
+    }
 
     class StreamChoice {
         constructor(payload, onSelect) {
@@ -38,9 +141,9 @@
             if (!box) {
                 created = true;
                 box = document.createElement('label'); box.id = 'source-controls'; box.hidden = true;
-                const title = document.createElement('span'); title.textContent = 'Источник ';
-                this.select = document.createElement('select'); this.select.setAttribute('aria-label', 'Источник трансляции');
-                box.append(title, this.select);
+                this.caption = document.createElement('span');
+                this.select = document.createElement('select');
+                box.append(this.caption, this.select);
                 this.select.addEventListener('change', () => {
                     const value = this.select.value;
                     if (value !== 'auto' && !this.sources.some(s => s.id === value)) return;
@@ -56,15 +159,61 @@
             if (box.parentElement !== $('preroll')) $('preroll').appendChild(box);
             box.hidden = !finished;
             if (created) this.render();
+            this.bindActivity();
+            if (finished && (created || !this.controlsUnlocked)) {
+                this.controlsUnlocked = true;
+                this.showControls();
+            }
+        }
+        bindActivity() {
+            const player = $('preroll');
+            if (this.activityTarget === player) return;
+            this.activityTarget = player;
+            player.addEventListener('pointerenter', e => {
+                this.hovering = e.pointerType === 'mouse' || e.pointerType === 'pen';
+                this.showControls();
+            });
+            player.addEventListener('pointermove', e => {
+                if (e.pointerType === 'mouse' || e.pointerType === 'pen') this.hovering = true;
+                this.showControls();
+            });
+            player.addEventListener('pointerleave', () => { this.hovering = false; this.scheduleHide(); });
+            player.addEventListener('pointerdown', e => {
+                if (e.pointerType === 'touch') this.hovering = false;
+                this.showControls();
+            }, true);
+            player.addEventListener('focusin', () => this.showControls());
+            player.addEventListener('focusout', () => this.scheduleHide());
+            player.addEventListener('keydown', () => this.showControls());
+            if (!this.windowActivityBound) {
+                this.windowActivityBound = true;
+                window.addEventListener('blur', () => { this.hovering = false; this.scheduleHide(); });
+            }
+        }
+        showControls() {
+            const box = $('source-controls');
+            if (!box || !finished) return;
+            box.classList.remove('controls-idle'); box.inert = false;
+            this.scheduleHide();
+        }
+        scheduleHide() {
+            clearTimeout(this.hideTimer);
+            this.hideTimer = setTimeout(() => {
+                const box = $('source-controls');
+                if (!box || this.hovering || (document.hasFocus() && box.matches(':focus-within'))) return;
+                box.classList.add('controls-idle'); box.inert = true;
+            }, 2000);
         }
         render() {
             if (!this.select) return;
+            this.caption.textContent = t('source');
+            this.select.setAttribute('aria-label', t('sourceLabel'));
             const selected = this.mode;
             this.select.replaceChildren();
             const option = (value, label) => { const node = document.createElement('option'); node.value = value; node.textContent = label; this.select.appendChild(node); };
             const index = this.sources.findIndex(s => s.id === this.active) + 1;
-            option('auto', `Авто — поток ${index}`);
-            this.sources.forEach((s, i) => option(s.id, `Поток ${i + 1}`));
+            option('auto', t('auto', index));
+            this.sources.forEach((s, i) => option(s.id, t('stream', i + 1)));
             this.select.value = selected;
         }
         use(sourceId) {
@@ -257,14 +406,16 @@
         streamChoice = new StreamChoice(stream, switchSource);
         const scan = () => {
             $('preroll').querySelectorAll('video, audio').forEach(watchMain);
+            localizeNative();
             streamChoice.mount();
         };
         mainObserver = new MutationObserver(scan);
-        mainObserver.observe($('preroll'), {childList: true, subtree: true});
+        mainObserver.observe($('preroll'), {childList: true, subtree: true, characterData: true,
+            attributes: true, attributeFilter: ['title', 'aria-label']});
         // Warm up muted until a preview is painted. Never run the stream under an ad.
         window.player = new window.Playerjs({id: 'preroll',
             file: base.replace(/\/+$/, '') + '/' + encodeURIComponent(id) + '.m3u8',
-            autoplay: started || finished ? 0 : 1, mute: 1, volume: 0, preload: 1, ratio: '16/9'});
+            autoplay: started || finished ? 0 : 1, mute: 1, volume: 0, preload: 1, ratio: '16/9', lang: uiLanguage});
         scan();
         if (!finished) mainCommand('mute');
         void streamChoice.choose();
@@ -380,9 +531,7 @@
             setStallTimer();
         }
         previous = video.currentTime; previousWall = now;
-        const remaining = Math.max(0, Math.ceil(15 - watched));
-        skip.disabled = remaining > 0;
-        skip.textContent = remaining ? `Пропустить через ${remaining} с` : 'Пропустить';
+        updateSkip();
         if (Number.isFinite(video.duration) && video.duration > 0) {
             for (const [name, fraction] of [['firstQuartile', .25], ['midpoint', .5], ['thirdQuartile', .75]]) {
                 if (watched >= video.duration * fraction) event(name);
@@ -402,13 +551,13 @@
         clearInterval(progressTimer); clearTimeout(stallTimer);
         video.pause(); video.removeAttribute('src'); video.load();
         adBox.hidden = true;
-        status.textContent = 'Загрузка трансляции…'; status.hidden = false;
+        setStatus('loadingStream');
         const stream = await streamPromise;
         if (!stream || !validId) {
-            status.textContent = validId ? 'Трансляция недоступна на этой странице.' : 'Идентификатор трансляции не указан или некорректен.';
+            setStatus(validId ? 'unavailable' : 'invalidId');
             return;
         }
-        if (!window.player) { status.textContent = 'Не удалось загрузить плеер.'; return; }
+        if (!window.player) { setStatus('playerError'); return; }
         status.hidden = true;
         $('poster').hidden = true;
         $('player-stage').inert = false;
@@ -433,7 +582,7 @@
         holdMain();
         $('poster').hidden = true;
         if (!config.vastUrl) { await finishAd(); return; }
-        status.textContent = 'Загрузка рекламы…'; status.hidden = false;
+        setStatus('loadingAd');
         try {
             const vast = safeUrl(config.vastUrl);
             if (!vast) throw new Error('Invalid VAST URL');
@@ -453,19 +602,18 @@
         try { await video.play(); resume.hidden = true; }
         catch {
             clearTimeout(stallTimer); resume.hidden = false;
-            resume.textContent = 'Нажмите, чтобы смотреть рекламу';
         }
     }
     video.addEventListener('playing', () => {
         previous = video.currentTime; previousWall = performance.now(); wasPlaying = true;
-        resume.hidden = true; pause.textContent = 'Пауза'; setStallTimer();
+        resume.hidden = true; pause.textContent = t('pause'); setStallTimer();
         if (!impressionSent && ad) {
             impressionSent = true; ad.impressions.forEach(u => ping(u)); event('start'); event('creativeView');
         } else if (sentEvents.has('pause')) event('resume');
     });
     video.addEventListener('pause', () => {
         clearTimeout(stallTimer);
-        if (!finished && wasPlaying) { event('pause'); pause.textContent = 'Продолжить'; }
+        if (!finished && wasPlaying) { event('pause'); pause.textContent = t('continue'); resume.hidden = false; }
     });
     video.addEventListener('ended', () => { event('complete'); void finishAd(); });
     video.addEventListener('error', () => { if (ad && !finished) failAd('405'); });
@@ -477,7 +625,7 @@
     skip.addEventListener('click', () => { if (watched >= 15) { event('skip'); void finishAd(); } });
     resume.addEventListener('click', () => void tryPlay());
     pause.addEventListener('click', () => video.paused ? void tryPlay() : video.pause());
-    mute.addEventListener('click', () => { video.muted = !video.muted; mute.textContent = video.muted ? 'Включить звук' : 'Выключить звук'; event(video.muted ? 'mute' : 'unmute'); });
+    mute.addEventListener('click', () => { video.muted = !video.muted; mute.textContent = t(video.muted ? 'unmute' : 'mute'); event(video.muted ? 'mute' : 'unmute'); });
     click.addEventListener('click', () => { if (ad) ad.clicks.forEach(u => ping(u)); });
     gate.addEventListener('click', () => void playAd());
 
@@ -496,13 +644,15 @@
                 // A CORS-safelisted content type avoids OPTIONS, which some upstream proxies reject.
                 // The body remains JSON and is decoded/validated by the handler as before.
                 streamPromise = request(GEO, {method: 'POST', headers: {'Content-Type': 'text/plain;charset=UTF-8'}, body: JSON.stringify({parentRef})})
-                    .then(JSON.parse).then(stream => { prepareMain(stream); return stream; }).catch(() => null);
-            }
+                    .then(JSON.parse).then(stream => { applyLanguage(stream.uiLanguage); prepareMain(stream); return stream; })
+                    .catch(() => { void loadUiLanguage(); return null; });
+            } else void loadUiLanguage();
             status.hidden = true; gate.disabled = false;
         } catch {
-            status.textContent = 'Не удалось загрузить настройки. Обновите страницу.';
+            setStatus('settingsError');
             gate.hidden = true;
         }
     }
+    applyLanguage(uiLanguage);
     void init();
 })();
