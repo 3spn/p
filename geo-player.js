@@ -12,6 +12,163 @@
     const sentEvents = new Set(), trackers = new Set();
     const mainVideos = new Set();
     let mainObserver = null, previewReady = false;
+    let streamChoice = null, pendingSource = null, sourceRevision = 0;
+
+    class StreamChoice {
+        constructor(payload, onSelect) {
+            this.sources = [];
+            this.mode = 'auto';
+            this.onSelect = onSelect;
+            this.generation = 0;
+            this.lastProbe = 0;
+            this.lastIssue = new Map();
+            if (payload.canChooseStream !== true || !Array.isArray(payload.streams)) return;
+            for (const item of payload.streams) {
+                if (!['primary', 'backup'].includes(item.id) || this.sources.some(s => s.id === item.id)) continue;
+                const base = safeUrl(item.streamBase);
+                if (base && !this.sources.some(s => s.base === base)) this.sources.push({id: item.id, base});
+            }
+            this.active = this.sources.find(s => s.base === safeUrl(payload.streamBase))?.id || this.sources[0]?.id;
+        }
+        get enabled() { return this.sources.length > 1; }
+        mount() {
+            if (!this.enabled) return;
+            let box = $('source-controls');
+            let created = false;
+            if (!box) {
+                created = true;
+                box = document.createElement('label'); box.id = 'source-controls'; box.hidden = true;
+                const title = document.createElement('span'); title.textContent = 'Источник ';
+                this.select = document.createElement('select'); this.select.setAttribute('aria-label', 'Источник трансляции');
+                box.append(title, this.select);
+                this.select.addEventListener('change', () => {
+                    const value = this.select.value;
+                    if (value !== 'auto' && !this.sources.some(s => s.id === value)) return;
+                    this.mode = value;
+                    this.generation++;
+                    if (value === 'auto') void this.choose(true);
+                    else this.use(value);
+                    this.render();
+                });
+                // Source selection must not propagate into the player's play/pause click handler.
+                for (const name of ['click', 'pointerdown', 'keydown']) box.addEventListener(name, e => e.stopPropagation());
+            }
+            if (box.parentElement !== $('preroll')) $('preroll').appendChild(box);
+            box.hidden = !finished;
+            if (created) this.render();
+        }
+        render() {
+            if (!this.select) return;
+            const selected = this.mode;
+            this.select.replaceChildren();
+            const option = (value, label) => { const node = document.createElement('option'); node.value = value; node.textContent = label; this.select.appendChild(node); };
+            const index = this.sources.findIndex(s => s.id === this.active) + 1;
+            option('auto', `Авто — поток ${index}`);
+            this.sources.forEach((s, i) => option(s.id, `Поток ${i + 1}`));
+            this.select.value = selected;
+        }
+        use(sourceId) {
+            const source = this.sources.find(s => s.id === sourceId);
+            if (!source || source.id === this.active) return;
+            this.active = source.id;
+            this.onSelect(source);
+            this.render();
+        }
+        issue() {
+            if (!this.enabled || this.mode !== 'auto' || !finished || document.hidden) return;
+            this.lastIssue.set(this.active, performance.now());
+            clearTimeout(this.recoveryTimer);
+            this.recoveryTimer = setTimeout(() => {
+                if (this.mode === 'auto' && finished && !document.hidden) void this.choose();
+            }, Math.max(0, 30000 - (performance.now() - this.lastProbe)));
+        }
+        async read(url, signal, limit) {
+            const response = await fetch(url, {credentials: 'omit', cache: 'no-store', signal});
+            if (!response.ok || !response.body) throw new Error('Unavailable');
+            const reader = response.body.getReader(), parts = [];
+            let size = 0;
+            try {
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+                    size += value.length;
+                    if (size > limit) throw new Error('Probe size limit');
+                    parts.push(value);
+                }
+            } finally { await reader.cancel().catch(() => {}); }
+            const result = new Uint8Array(size);
+            let offset = 0;
+            for (const part of parts) { result.set(part, offset); offset += part.length; }
+            return result;
+        }
+        async probe(source) {
+            const controller = new AbortController(), startedAt = performance.now();
+            const timer = setTimeout(() => controller.abort(), 6000);
+            try {
+                let url = source.base.replace(/\/+$/, '') + '/' + encodeURIComponent(id) + '.m3u8';
+                const decoder = new TextDecoder();
+                let lines;
+                // Follow at most two master playlists; use the lowest declared bandwidth for the trial.
+                for (let depth = 0; depth < 3; depth++) {
+                    const body = decoder.decode(await this.read(url, controller.signal, 262144)).trim();
+                    if (!body.startsWith('#EXTM3U')) throw new Error('Invalid playlist');
+                    lines = body.split(/\r?\n/).map(s => s.trim());
+                    const variants = [];
+                    for (let i = 0; i < lines.length - 1; i++) if (lines[i].startsWith('#EXT-X-STREAM-INF:')) {
+                        const next = lines.slice(i + 1).find(s => s && !s.startsWith('#'));
+                        const target = safeUrl(next, url);
+                        if (target) variants.push({url: target, bandwidth: Number(lines[i].match(/(?:^|[, :])BANDWIDTH=(\d+)/)?.[1] || Infinity)});
+                    }
+                    if (!variants.length) break;
+                    if (depth === 2) throw new Error('Playlist depth');
+                    variants.sort((a, b) => a.bandwidth - b.bandwidth);
+                    url = variants[0].url;
+                }
+                if (!lines.some(s => s.startsWith('#EXTINF:'))) throw new Error('No complete segments');
+                const segments = lines.filter(s => s && !s.startsWith('#')).map(s => safeUrl(s, url)).filter(Boolean).slice(-2);
+                if (!segments.length || lines.some(s => s.startsWith('#EXT-X-BYTERANGE:'))) throw new Error('Unsupported trial');
+                const manifestMs = performance.now() - startedAt;
+                const times = [];
+                for (const segment of segments) {
+                    const before = performance.now();
+                    const bytes = await this.read(segment, controller.signal, 4194304);
+                    if (!bytes.length) throw new Error('Empty segment');
+                    times.push(performance.now() - before);
+                }
+                const average = times.reduce((a, b) => a + b, 0) / times.length;
+                const jitter = Math.max(...times) - Math.min(...times);
+                return {id: source.id, score: manifestMs + average + jitter};
+            } catch { return {id: source.id, score: Infinity}; }
+            finally { clearTimeout(timer); }
+        }
+        async choose(force = false) {
+            if (!this.enabled || this.mode !== 'auto') return;
+            this.lastProbe = performance.now();
+            const generation = ++this.generation;
+            const results = await Promise.all(this.sources.map(source => this.probe(source)));
+            if (generation !== this.generation || this.mode !== 'auto') return;
+            const score = result => result.score + (performance.now() - (this.lastIssue.get(result.id) ?? -Infinity) < 60000 ? 3000 : 0);
+            results.sort((a, b) => score(a) - score(b));
+            const best = results[0], current = results.find(r => r.id === this.active);
+            // Inconclusive (including missing CORS) keeps the GEO default. A small timing difference is ignored.
+            if (Number.isFinite(best.score) && (force || score(best) < score(current) * .8)) this.use(best.id);
+        }
+    }
+
+    function switchSource(source) {
+        if (!streamChoice?.enabled) return;
+        if (started && !finished) { pendingSource = source; return; }
+        const wasPlaying = [...$('preroll').querySelectorAll('video')].some(media => !media.paused);
+        sourceRevision++;
+        if (!finished) {
+            previewReady = false;
+            $('shell').classList.remove('preview-ready');
+            mainCommand('mute'); mainCommand('volume', 0);
+        }
+        const file = source.base.replace(/\/+$/, '') + '/' + encodeURIComponent(id) + '.m3u8';
+        // Manual choice starts the selected live source. Automatic choice respects a user's pause.
+        mainCommand(!finished || streamChoice.mode !== 'auto' || wasPlaying ? 'play' : 'preload', file);
+    }
 
     function mainCommand(command, value) {
         try { window.player?.api(command, value); } catch { /* Native media remains guarded below. */ }
@@ -36,6 +193,15 @@
         media.preload = 'auto';
         media.setAttribute('playsinline', '');
         media.addEventListener('volumechange', lockSound);
+        let waitingTimer = 0;
+        const clearWaiting = () => { clearTimeout(waitingTimer); };
+        media.addEventListener('waiting', () => {
+            clearWaiting();
+            if (finished && !media.paused) waitingTimer = setTimeout(() => streamChoice?.issue(), 10000);
+        });
+        media.addEventListener('playing', clearWaiting);
+        media.addEventListener('pause', clearWaiting);
+        media.addEventListener('error', () => streamChoice?.issue());
         // loadeddata means decoding is possible, not that Playerjs has displayed its video.
         // Let its startup run for two seconds of actual playback, then wait for a painted frame.
         if (media.tagName === 'VIDEO') {
@@ -51,9 +217,10 @@
             const freezeAfterPaint = () => {
                 if (!canPreview() || paintPending || playedSeconds() < 2) return;
                 paintPending = true;
+                const revision = sourceRevision;
                 requestAnimationFrame(() => requestAnimationFrame(() => {
                     paintPending = false;
-                    if (!canPreview()) return;
+                    if (!canPreview() || revision !== sourceRevision) return;
                     previewReady = true;
                     $('shell').classList.add('preview-ready');
                     $('poster').hidden = true;
@@ -87,7 +254,11 @@
         if (!stream || !validId) return;
         const base = safeUrl(stream.streamBase);
         if (!base || typeof window.Playerjs !== 'function') return;
-        const scan = () => $('preroll').querySelectorAll('video, audio').forEach(watchMain);
+        streamChoice = new StreamChoice(stream, switchSource);
+        const scan = () => {
+            $('preroll').querySelectorAll('video, audio').forEach(watchMain);
+            streamChoice.mount();
+        };
         mainObserver = new MutationObserver(scan);
         mainObserver.observe($('preroll'), {childList: true, subtree: true});
         // Warm up muted until a preview is painted. Never run the stream under an ad.
@@ -96,6 +267,7 @@
             autoplay: started || finished ? 0 : 1, mute: 1, volume: 0, preload: 1, ratio: '16/9'});
         scan();
         if (!finished) mainCommand('mute');
+        void streamChoice.choose();
     }
 
     function safeUrl(value, base = location.href) {
@@ -239,11 +411,15 @@
         if (!window.player) { status.textContent = 'Не удалось загрузить плеер.'; return; }
         status.hidden = true;
         $('poster').hidden = true;
-        mainObserver?.disconnect();
         $('player-stage').inert = false;
+        streamChoice?.mount();
         for (const media of mainVideos) { media.muted = false; media.volume = 1; }
         mainCommand('volume', 1);
         mainCommand('unmute');
+        if (pendingSource) {
+            const next = pendingSource; pendingSource = null;
+            switchSource(next);
+        }
         mainCommand('play');
     }
     function failAd(code) {
