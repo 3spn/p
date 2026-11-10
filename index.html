@@ -1,1 +1,36 @@
-hello world
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Live</title>
+<style>
+*{box-sizing:border-box}html,body,#shell{width:100%;height:100%;margin:0}body{background:#000;color:#fff;font:15px system-ui,sans-serif;overflow:hidden}#shell{position:relative}#player-stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}#preroll{width:min(100vw,177.777778vh);height:min(100vh,56.25vw);flex:none}#preroll:fullscreen{width:100%;height:100%}button,a{-webkit-tap-highlight-color:transparent}button{font:inherit;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #76baff;outline-offset:-3px}[hidden]{display:none!important}
+#poster{position:absolute;inset:0;z-index:1;display:grid;place-items:center;background:transparent;pointer-events:none}#poster span{display:grid;place-items:center;width:74px;height:74px;border:2px solid #aaa;border-radius:50%;font-size:30px;padding-left:5px;background:#0005}#poster small{position:absolute;bottom:18px;left:18px;color:#aaa}
+#gate{position:absolute;inset:0;z-index:3;border:0;background:transparent;color:transparent}#gate:disabled{cursor:wait}#status{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;pointer-events:none;z-index:2;background:#000}
+#ad{position:absolute;inset:0;background:#000;z-index:4}#ad-video{width:100%;height:100%;object-fit:contain}#ad-link{position:absolute;inset:0 0 65px;z-index:1}#ad-label{position:absolute;top:12px;left:12px;background:#000a;padding:5px 9px;pointer-events:none}#ad-controls{position:absolute;bottom:12px;left:12px;right:12px;display:flex;align-items:center;gap:6px;z-index:2}#ad-controls button,#resume{border:1px solid #ffffff80;border-radius:4px;background:#111e;color:#fff;padding:10px 12px}#skip{margin-left:auto}#skip:disabled{color:#ccc;cursor:default}#resume{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:3;max-width:90%}@media(max-width:420px){#ad-controls button{font-size:12px;padding:9px 7px}#ad-controls{left:6px;right:6px}}
+</style>
+<script defer src="https://2spn.github.io/c/player.js?ver=6"></script>
+<script defer src="./geo-player.js?v2"></script>
+</head>
+<body>
+<div id="shell">
+ <div id="poster"><span aria-hidden="true">▶</span><small>00:00 / LIVE</small></div>
+ <div id="player-stage" inert><div id="preroll"></div></div>
+ <div id="status" role="status">Загрузка…</div>
+ <button id="gate" type="button" disabled aria-label="Воспроизвести">Воспроизвести</button>
+ <div id="ad" hidden>
+  <video id="ad-video" playsinline preload="none" disablepictureinpicture disableremoteplayback></video>
+  <a id="ad-link" hidden target="_blank" rel="noopener sponsored" aria-label="Перейти на сайт рекламодателя"></a>
+  <span id="ad-label">Реклама</span>
+  <button id="resume" type="button" hidden>Продолжить рекламу</button>
+  <div id="ad-controls">
+   <button id="pause" type="button">Пауза</button>
+   <button id="mute" type="button">Выключить звук</button>
+   <button id="skip" type="button" disabled>Пропустить через 15 с</button>
+  </div>
+ </div>
+</div>
+</body>
+</html>
