@@ -93,10 +93,15 @@
         }
     }
     function setStatus(key) { statusKey = key; status.textContent = t(key); status.hidden = false; }
+    function setAdControl(button, key, value) {
+        button.textContent = t(key, value);
+        button.setAttribute('aria-label', t(key, value));
+        button.dataset.icon = {pause: '⏸', continue: '▶', mute: '🔈', unmute: '🔊', skip: '⏩', skipAfter: '⏩'}[key];
+    }
     function updateSkip() {
         const remaining = Math.max(0, Math.ceil(15 - watched));
         skip.disabled = remaining > 0;
-        skip.textContent = remaining ? t('skipAfter', remaining) : t('skip');
+        setAdControl(skip, remaining ? 'skipAfter' : 'skip', remaining);
     }
     function applyLanguage(language) {
         uiLanguage = browserRussian || language === 'ru' ? 'ru' : 'en';
@@ -107,8 +112,8 @@
         click.setAttribute('aria-label', t('advertiser'));
         $('ad-label').textContent = t('ad');
         if ($('live-label')) $('live-label').textContent = '00:00 / ' + t('live');
-        pause.textContent = t(wasPlaying && video.paused ? 'continue' : 'pause');
-        mute.textContent = t(video.muted ? 'unmute' : 'mute');
+        setAdControl(pause, wasPlaying && video.paused ? 'continue' : 'pause');
+        setAdControl(mute, video.muted ? 'unmute' : 'mute');
         status.textContent = t(statusKey);
         updateSkip(); streamChoice?.render(); localizeNative();
     }
@@ -606,14 +611,14 @@
     }
     video.addEventListener('playing', () => {
         previous = video.currentTime; previousWall = performance.now(); wasPlaying = true;
-        resume.hidden = true; pause.textContent = t('pause'); setStallTimer();
+        resume.hidden = true; setAdControl(pause, 'pause'); setStallTimer();
         if (!impressionSent && ad) {
             impressionSent = true; ad.impressions.forEach(u => ping(u)); event('start'); event('creativeView');
         } else if (sentEvents.has('pause')) event('resume');
     });
     video.addEventListener('pause', () => {
         clearTimeout(stallTimer);
-        if (!finished && wasPlaying) { event('pause'); pause.textContent = t('continue'); resume.hidden = false; }
+        if (!finished && wasPlaying) { event('pause'); setAdControl(pause, 'continue'); resume.hidden = false; }
     });
     video.addEventListener('ended', () => { event('complete'); void finishAd(); });
     video.addEventListener('error', () => { if (ad && !finished) failAd('405'); });
@@ -625,7 +630,7 @@
     skip.addEventListener('click', () => { if (watched >= 15) { event('skip'); void finishAd(); } });
     resume.addEventListener('click', () => void tryPlay());
     pause.addEventListener('click', () => video.paused ? void tryPlay() : video.pause());
-    mute.addEventListener('click', () => { video.muted = !video.muted; mute.textContent = t(video.muted ? 'unmute' : 'mute'); event(video.muted ? 'mute' : 'unmute'); });
+    mute.addEventListener('click', () => { video.muted = !video.muted; setAdControl(mute, video.muted ? 'unmute' : 'mute'); event(video.muted ? 'mute' : 'unmute'); });
     click.addEventListener('click', () => { if (ad) ad.clicks.forEach(u => ping(u)); });
     gate.addEventListener('click', () => void playAd());
 
